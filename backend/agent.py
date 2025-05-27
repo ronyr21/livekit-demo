@@ -8,11 +8,13 @@ from livekit.agents import (
     cli,
     llm,
 )
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from livekit.plugins import openai, azure, silero
 from dotenv import load_dotenv
 from api import AssistantFnc
 from prompts import WELCOME_MESSAGE, INSTRUCTIONS, LOOKUP_VIN_MESSAGE
+from conversation_monitor import ConversationMonitor
 import os
 import logging
 
@@ -58,12 +60,18 @@ async def entrypoint(ctx: JobContext):
                 language="en-US",
             ),
             vad=silero.VAD.load(),
+            turn_detection=MultilingualModel(),
         )
 
         # Start the agent session
         logger.info("Starting the agent session...")
         await session.start(agent=assistant, room=ctx.room)
         logger.info("Agent started successfully.")
+
+        # Initialize conversation monitor
+        logger.info("Initializing conversation monitor...")
+        monitor = ConversationMonitor(session, enable_partial_transcripts=True)
+        monitor.log_session_start(room_name=ctx.room.name)
 
         # Generate a welcome message
         logger.info("Generating welcome message...")
@@ -75,20 +83,48 @@ async def entrypoint(ctx: JobContext):
             try:
                 logger.info("User speech committed, processing...")
 
-                # Process the message based on whether the assistant has a car
+                # Log the business logic decision
                 if not assistant_fnc.has_car():
+                    monitor.log_custom_event(
+                        f"No car found, initiating VIN lookup for: {transcript}"
+                    )
                     lookup_message = LOOKUP_VIN_MESSAGE(transcript)
                     # Send a system instruction to guide the response
                     session.generate_reply(instructions=lookup_message)
                 else:
+                    monitor.log_custom_event(
+                        "Car found, proceeding with normal conversation flow"
+                    )
                     # Normal flow - just generate a reply to the user's input
                     session.generate_reply(user_input=transcript)
 
             except Exception as e:
                 logger.error(f"Error in on_user_speech_committed: {e}")
+                monitor.log_custom_event(
+                    f"Error processing user speech: {e}", level="error"
+                )
+
+        @session.on("close")
+        def on_session_close(event):
+            """Handle session close and log session end."""
+            logger.info("Session is closing...")
+            monitor.log_session_end()
+            if hasattr(event, "error") and event.error:
+                monitor.log_custom_event(
+                    f"Session closed with error: {event.error}", level="error"
+                )
 
     except Exception as e:
         logger.error(f"Error in entrypoint: {e}")
+        # Try to log session end if monitor was initialized
+        try:
+            if "monitor" in locals():
+                monitor.log_custom_event(
+                    f"Session ended with error: {e}", level="error"
+                )
+                monitor.log_session_end()
+        except:
+            pass
         ctx.shutdown()
 
 

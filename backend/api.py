@@ -31,9 +31,8 @@ class AssistantFnc(Agent):
         car_str = ""
         for key, value in self._car_details.items():
             car_str += f"{key}: {value}\n"
-        return car_str
+        return car_str @ function_tool
 
-    @function_tool
     async def lookup_car(self, ctx: RunContext, vin: str) -> str:
         """
         Lookup a car by its VIN.
@@ -41,9 +40,10 @@ class AssistantFnc(Agent):
         Parameters:
         vin (str): The VIN of the car to lookup.
         """
-        logger.info("lookup car - vin: %s", vin)
+        logger.info("🔍 FUNCTION CALL: lookup_car - vin: %s", vin)
         result = DB.get_car_by_vin(vin)
         if result is None:
+            logger.info("❌ Car not found for VIN: %s", vin)
             return "Car not found"
         self._car_details = {
             CarDetails.VIN: result.vin,
@@ -51,17 +51,24 @@ class AssistantFnc(Agent):
             CarDetails.Model: result.model,
             CarDetails.Year: result.year,
         }
-        return f"The car details are: {self.get_car_str()}"
+        logger.info(
+            "✅ Car found: %s %s %s %s",
+            result.year,
+            result.make,
+            result.model,
+            result.vin,
+        )
+        return f"The car details are: {self.get_car_str()}" @ function_tool
 
-    @function_tool
     async def get_car_details(self, ctx: RunContext) -> str:
         """
         Get the details of the current car.
         """
-        logger.info("get car details")
-        return f"The car details are: {self.get_car_str()}"
+        logger.info("🔍 FUNCTION CALL: get_car_details")
+        car_details = self.get_car_str()
+        logger.info("📋 Current car details: %s", car_details)
+        return f"The car details are: {car_details}" @ function_tool
 
-    @function_tool
     async def create_car(
         self, ctx: RunContext, vin: str, make: str, model: str, year: int
     ) -> str:
@@ -75,7 +82,7 @@ class AssistantFnc(Agent):
         year (int): The year of the car.
         """
         logger.info(
-            "create car - vin: %s, make: %s, model: %s, year: %s",
+            "🔍 FUNCTION CALL: create_car - vin: %s, make: %s, model: %s, year: %s",
             vin,
             make,
             model,
@@ -83,6 +90,7 @@ class AssistantFnc(Agent):
         )
         result = DB.create_car(vin, make, model, year)
         if result is None:
+            logger.info("❌ Failed to create car")
             return "Failed to create car"
         self._car_details = {
             CarDetails.VIN: result.vin,
@@ -90,6 +98,13 @@ class AssistantFnc(Agent):
             CarDetails.Model: result.model,
             CarDetails.Year: result.year,
         }
+        logger.info(
+            "✅ Car created successfully: %s %s %s %s",
+            result.year,
+            result.make,
+            result.model,
+            result.vin,
+        )
         return "Car created!"
 
     def has_car(self) -> bool:

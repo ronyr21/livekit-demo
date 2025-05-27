@@ -122,10 +122,8 @@ async def demo_enhanced_streaming_monitoring():
     print("  🎵 Audio frame monitoring")
     print("  📊 Performance metrics")
     print("  ⚡ Real-time analytics")
-    print("-" * 120)
-
-    # Import our enhanced monitor
-    from streaming_conversation_monitor import StreamingConversationMonitor
+    print("-" * 120)  # Import our enhanced monitor
+    from streaming_conversation_monitor_fixed import StreamingConversationMonitor
 
     # Create mock session
     session = MockSession()

@@ -69,9 +69,7 @@ class StreamingConversationMonitor:
                 "%(asctime)s | %(name)s | %(message)s", datefmt="%H:%M:%S"
             )
             console_handler.setFormatter(formatter)
-            self.logger.addHandler(console_handler)
-
-        # Enhanced state tracking
+            self.logger.addHandler(console_handler)  # Enhanced state tracking
         self.conversation_count = 0
         self.current_user_transcript = ""
         self.transcript_buffer = deque(maxlen=streaming_buffer_size)
@@ -81,7 +79,12 @@ class StreamingConversationMonitor:
         # Streaming state
         self.current_streaming_session = None
         self.last_partial_transcript = ""
-        self.partial_transcript_count = 0
+        self.partial_transcript_count = (
+            0  # Agent streaming state for simulated streaming
+        )
+        self.agent_response_chunks = []
+        self.agent_chunk_count = 0
+        self.agent_streaming_active = False
 
         # Audio monitoring state
         self.user_audio_level = 0.0
@@ -90,9 +93,7 @@ class StreamingConversationMonitor:
 
         # Performance metrics
         self.transcript_latency = []
-        self.speech_latency = []
-
-        # Register all event handlers
+        self.speech_latency = []  # Register all event handlers
         self._register_event_handlers()
         self._setup_audio_monitoring()
 
@@ -168,22 +169,71 @@ class StreamingConversationMonitor:
             if interrupted:
                 self.logger.info(f"⚠️  [INTERRUPTED] {content}")
             else:
-                self.logger.info(f"💬 {content}")
-
-            # Log streaming metrics
+                self.logger.info(f"💬 {content}")  # Log streaming metrics
             if self.partial_transcript_count > 0:
                 self.logger.info(
                     f"📈 Streaming metrics: {self.partial_transcript_count} partial transcripts processed"
                 )
                 self.partial_transcript_count = 0
-
         elif role == "assistant":
-            self.logger.info("━" * 100)
-            self.logger.info(f"🤖 AGENT RESPONSE #{self.conversation_count} [FINAL]")
-            if interrupted:
-                self.logger.info(f"⚠️  [INTERRUPTED] {content}")
+            self.logger.info("🔍 ENTERING ASSISTANT BRANCH - Starting debug")
+            self.logger.info(
+                f"🔍 DEBUG VALUES: enable_text_streaming={self.enable_text_streaming}, content_exists={bool(content)}, interrupted={interrupted}"
+            )
+            self.logger.info(
+                f"🔍 CONTENT PREVIEW: '{content[:50] if content else 'None'}...'"
+            )
+
+            # Simulate streaming for agent responses similar to user partial transcripts
+            if self.enable_text_streaming and content and not interrupted:
+                self.logger.info(
+                    "🚀 CONDITION MET - Starting agent streaming simulation..."
+                )
+
+                # Try running the streaming simulation directly instead of as a task
+                try:
+                    self.logger.info("🔄 CALLING _simulate_agent_streaming directly...")
+                    # Run synchronously first to see if it works
+                    import asyncio
+
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If event loop is running, create task
+                        task = asyncio.create_task(
+                            self._simulate_agent_streaming(content, timestamp)
+                        )
+                        self.logger.info("✅ Task created successfully")
+                    else:
+                        # If no loop, run directly
+                        asyncio.run(self._simulate_agent_streaming(content, timestamp))
+                        self.logger.info("✅ Streaming simulation completed directly")
+                except Exception as e:
+                    self.logger.error(f"❌ ERROR in streaming: {e}")
+                    import traceback
+
+                    self.logger.error(f"❌ TRACEBACK: {traceback.format_exc()}")
+
+                    # Fall back to standard logging
+                    self.logger.info("━" * 100)
+                    self.logger.info(
+                        f"🤖 AGENT RESPONSE #{self.conversation_count} [FINAL - FALLBACK]"
+                    )
+                    self.logger.info(f"💬 {content}")
+                return  # Exit early to avoid duplicate logging
             else:
-                self.logger.info(f"💬 {content}")
+                # Standard logging for interrupted responses or when streaming is disabled
+                self.logger.info(f"🔍 CONDITION NOT MET - Using standard logging")
+                self.logger.info(
+                    f"🔍 Reasons: streaming_enabled={self.enable_text_streaming}, has_content={bool(content)}, not_interrupted={not interrupted}"
+                )
+                self.logger.info("━" * 100)
+                self.logger.info(
+                    f"🤖 AGENT RESPONSE #{self.conversation_count} [FINAL]"
+                )
+                if interrupted:
+                    self.logger.info(f"⚠️  [INTERRUPTED] {content}")
+                else:
+                    self.logger.info(f"💬 {content}")
 
         elif role == "system":
             self.logger.info("━" * 100)
@@ -262,14 +312,86 @@ class StreamingConversationMonitor:
             # Enhanced logging with streaming metrics
             self.logger.info(
                 f"{streaming_indicator} STREAMING #{self.partial_transcript_count:03d}: {transcript}"
-            )
-
-            # Log character-by-character streaming if very granular
+            )  # Log character-by-character streaming if very granular
             if char_difference > 0 and char_difference < 5:
                 new_chars = transcript[
                     len(self.last_partial_transcript) - char_difference :
                 ]
                 self.logger.info(f"📝 NEW CHARS: '{new_chars}'")
+
+    async def _simulate_agent_streaming(
+        self, content: str, timestamp: datetime.datetime
+    ):
+        """Simulate agent response streaming similar to user partial transcripts."""
+        if not content or not self.enable_text_streaming:
+            return
+
+        # Reset streaming state for new agent response
+        self.agent_response_chunks = []
+        self.agent_chunk_count = 0
+        self.agent_streaming_active = True
+
+        try:
+            # Log start of agent streaming
+            self.logger.info("━" * 100)
+            self.logger.info(
+                f"🤖 AGENT RESPONSE #{self.conversation_count} [STREAMING]"
+            )
+
+            if isinstance(content, list):
+                content = " ".join(content)
+
+            # Split content into words for realistic streaming simulation
+            words = content.split()
+
+            # Simulate progressive streaming similar to user transcripts
+            current_text = ""
+            for i, word in enumerate(words):
+                if not self.agent_streaming_active:
+                    break
+
+                # Add the next word
+                if current_text:
+                    current_text += " " + word
+                else:
+                    current_text = word
+
+                self.agent_chunk_count += 1
+
+                # Add to streaming buffer
+                self.transcript_buffer.append(
+                    {
+                        "timestamp": datetime.datetime.now(),
+                        "role": "assistant",
+                        "content": current_text,
+                        "interrupted": False,
+                        "type": "agent_streaming",
+                        "chunk_count": self.agent_chunk_count,
+                    }
+                )
+
+                # Log the streaming chunk similar to user transcription format
+                streaming_indicator = "🌊"
+                self.logger.info(
+                    f"{streaming_indicator} AGENT STREAMING #{self.agent_chunk_count:03d}: {current_text}"
+                )
+
+                # Small delay to simulate realistic streaming timing
+                await asyncio.sleep(
+                    0.1 + (len(word) * 0.02)
+                )  # Longer words take slightly longer
+
+            # Log completion
+            self.logger.info(
+                f"🏁 AGENT STREAMING COMPLETE - {self.agent_chunk_count} chunks"
+            )
+            self.logger.info("━" * 100)
+            self.logger.info(f"💬 {content}")
+
+        except Exception as e:
+            self.logger.error(f"❌ Error in agent streaming simulation: {e}")
+        finally:
+            self.agent_streaming_active = False
 
     def _handle_speech_created(self, event: SpeechCreatedEvent):
         """Handle when agent speech is created with enhanced tracking."""

@@ -3,3 +3,41 @@ ai/
 __pycache__/
 .env
 auto_db.sqlite
+
+# Ngrok executable and logs
+ngrok.exe
+ngrok.log
+ngrok.yml
+
+# MinIO data, logs, and executable
+minio-data/
+*.minio
+minio.log
+minio.exe
+
+# Python cache and virtual environment
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+.env.local
+.env.production
+
+# IDE files
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp

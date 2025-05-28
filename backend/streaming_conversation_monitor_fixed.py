@@ -89,11 +89,15 @@ class StreamingConversationMonitor:
         # Audio monitoring state
         self.user_audio_level = 0.0
         self.agent_audio_level = 0.0
-        self.audio_monitoring_active = False
-
-        # Performance metrics
+        self.audio_monitoring_active = False  # Performance metrics
         self.transcript_latency = []
-        self.speech_latency = []  # Register all event handlers
+        self.speech_latency = []
+
+        # Shutdown state tracking
+        self.is_shutting_down = False
+        self.room_closed = False
+
+        # Register all event handlers
         self._register_event_handlers()
         self._setup_audio_monitoring()
 
@@ -519,7 +523,10 @@ class StreamingConversationMonitor:
 
     def _handle_close(self, event: CloseEvent):
         """Handle session close with enhanced metrics."""
+        self.is_shutting_down = True
+        self.room_closed = True
         self.audio_monitoring_active = False
+
         self.logger.info("🔚 SESSION CLOSING...")
 
         # Log session metrics
@@ -612,26 +619,36 @@ class StreamingConversationMonitor:
 
     def log_streaming_text(self, text: str, participant: str = "unknown"):
         """Log streaming text in real-time."""
-        if not self.enable_text_streaming:
+        if not self.enable_text_streaming or self.is_shutting_down or self.room_closed:
             return
 
-        timestamp = datetime.datetime.now()
-        self.logger.info(f"📡 STREAMING TEXT [{participant}]: {text}")
+        try:
+            timestamp = datetime.datetime.now()
+            self.logger.info(f"📡 STREAMING TEXT [{participant}]: {text}")
 
-        # Add to buffer
-        self.transcript_buffer.append(
-            {
-                "timestamp": timestamp,
-                "role": participant,
-                "content": text,
-                "type": "streaming",
-                "source": "external",
-            }
-        )
+            # Add to buffer
+            self.transcript_buffer.append(
+                {
+                    "timestamp": timestamp,
+                    "role": participant,
+                    "content": text,
+                    "type": "streaming",
+                    "source": "external",
+                }
+            )
+        except Exception as e:
+            # Silently ignore streaming errors during shutdown
+            pass
 
     def get_streaming_buffer(self) -> List[Dict[str, Any]]:
         """Get the current streaming buffer contents."""
         return list(self.transcript_buffer)
+
+    def shutdown(self):
+        """Signal that the monitor should stop streaming operations."""
+        self.is_shutting_down = True
+        self.room_closed = True
+        self.audio_monitoring_active = False
 
     def log_custom_event(
         self, message: str, level: str = "info", category: str = "general"
@@ -644,6 +661,10 @@ class StreamingConversationMonitor:
             level: Log level ('info', 'warning', 'error')
             category: Event category for filtering
         """
+        # Skip logging if the session is shutting down to avoid connection errors
+        if self.is_shutting_down or self.room_closed:
+            return
+
         timestamp = datetime.datetime.now()
         category_icon = {
             "general": "ℹ️",
@@ -654,12 +675,16 @@ class StreamingConversationMonitor:
             "performance": "⚡",
         }.get(category, "ℹ️")
 
-        if level == "warning":
-            self.logger.warning(f"⚠️  [{category.upper()}] {message}")
-        elif level == "error":
-            self.logger.error(f"❌ [{category.upper()}] {message}")
-        else:
-            self.logger.info(f"{category_icon} [{category.upper()}] {message}")
+        try:
+            if level == "warning":
+                self.logger.warning(f"⚠️  [{category.upper()}] {message}")
+            elif level == "error":
+                self.logger.error(f"❌ [{category.upper()}] {message}")
+            else:
+                self.logger.info(f"{category_icon} [{category.upper()}] {message}")
+        except Exception as e:
+            # Silently ignore logging errors during shutdown to prevent error spam
+            pass
 
     def log_session_start(self, room_name: Optional[str] = None):
         """Log session start with enhanced room information."""

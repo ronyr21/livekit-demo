@@ -24,14 +24,14 @@ from api import AssistantFnc
 from prompts import WELCOME_MESSAGE, INSTRUCTIONS, LOOKUP_VIN_MESSAGE
 from streaming_conversation_monitor_fixed import StreamingConversationMonitor
 from livekit import rtc, api
-from livekit.protocol.egress import StopEgressRequest
+from livekit.protocol.egress import StopEgressRequest, ListEgressRequest
+from typing import AsyncIterator, AsyncIterable
 import os
-import logging
-import asyncio
 import sys
 import time
-import datetime
-from typing import AsyncIterator, AsyncIterable
+import logging
+import asyncio
+from datetime import datetime
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -80,14 +80,15 @@ class EnhancedAgent(Agent):
         text_chunks = []
         async for text_chunk in text:
             collected_text += text_chunk
-            text_chunks.append(text_chunk)
-
-        # Log start of speech generation
+            text_chunks.append(text_chunk)  # Log start of speech generation
         logger.info("━" * 100)
         logger.info("🤖 AGENT STARTING TO SPEAK:")
         logger.info("━" * 100)
-
-        if hasattr(self, "monitor") and self.monitor.enable_text_streaming:
+        if (
+            hasattr(self, "monitor")
+            and self.monitor.enable_text_streaming
+            and not getattr(self.monitor, "is_shutting_down", False)
+        ):
             self.monitor.log_custom_event(
                 "🎤 AGENT SPEECH GENERATION STARTED",
                 category="streaming",
@@ -111,20 +112,25 @@ class EnhancedAgent(Agent):
         displayed_text = ""
 
         async for audio_frame in audio_generator:
-            frame_count += 1  # Calculate how much text to show based on audio progress
+            frame_count += 1
+            # Calculate how much text to show based on audio progress
             target_char_index = min(current_char_index + chars_per_frame, total_chars)
 
             if target_char_index > current_char_index:
                 # Show the new portion of text
                 new_text_portion = collected_text[current_char_index:target_char_index]
                 displayed_text += new_text_portion
-                current_char_index = target_char_index
-
-                # Display current progress every few frames
+                current_char_index = (
+                    target_char_index  # Display current progress every few frames
+                )
                 if frame_count % 15 == 0 or current_char_index >= total_chars:
                     logger.info(f"🗣️ SPEAKING: '{displayed_text.strip()}'")
 
-                    if hasattr(self, "monitor") and self.monitor.enable_text_streaming:
+                    if (
+                        hasattr(self, "monitor")
+                        and self.monitor.enable_text_streaming
+                        and not getattr(self.monitor, "is_shutting_down", False)
+                    ):
                         self.monitor.log_custom_event(
                             f"🎵 AUDIO FRAME #{frame_count}: '{displayed_text.strip()}'",
                             category="streaming",
@@ -140,7 +146,9 @@ class EnhancedAgent(Agent):
         logger.info(f"💬 COMPLETE TRANSCRIPT: '{collected_text.strip()}'")
         logger.info("━" * 100)
 
-        if hasattr(self, "monitor"):
+        if hasattr(self, "monitor") and not getattr(
+            self.monitor, "is_shutting_down", False
+        ):
             self.monitor.log_custom_event(
                 f"✅ SPEECH COMPLETE - {frame_count} frames, {len(collected_text)} chars",
                 category="streaming",
@@ -148,112 +156,310 @@ class EnhancedAgent(Agent):
             )
 
 
+async def wait_for_egress_completion(lkapi, egress_id, timeout=30):
+    """Wait for egress to complete upload before returning status"""
+    import time
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        egress_list = await lkapi.egress.list_egress(api.ListEgressRequest())
+        for egress in egress_list.items:
+            if egress.egress_id == egress_id:
+                if egress.status in [
+                    api.EgressStatus.EGRESS_COMPLETE,
+                    api.EgressStatus.EGRESS_FAILED,
+                ]:
+                    return egress
+        await asyncio.sleep(1)
+    return None
+
+
 async def entrypoint(ctx: JobContext):
     try:
         logger.info("🔌 Connecting to the room...")
 
+        # Connect to room FIRST
+        await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+
         # ============================================
-        # 🎵 LOCAL AUDIO RECORDING SETUP WITH MINIO
+        # 🎵 IMPROVED AUDIO RECORDING SETUP WITH MONITORING
         # ============================================
 
-        # logger.info("🎬 Setting up local audio recording with MinIO...")
+        logger.info("🎬 Setting up audio recording with MinIO...")
         recording_info = None
+
+        # Wait for room to be stable and have participants
+        logger.info("⏳ Waiting for room to stabilize before starting recording...")
+        await asyncio.sleep(3)  # Give time for initial connection
+
+        # Check if there are any participants
+        participant_count = len(ctx.room.remote_participants)
+        logger.info(f"👥 Room participants: {participant_count} (including agent)")
+
+        # Verify audio tracks exist before recording
+        local_audio_tracks = [
+            t
+            for t in ctx.room.local_participant.track_publications.values()
+            if t.track and t.track.kind == "audio"
+        ]
+        logger.info(f"🎵 Local audio tracks: {len(local_audio_tracks)}")
 
         try:
             # Generate timestamp for unique filenames
-            from datetime import datetime
-
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"recording_{ctx.room.name}_{timestamp}.ogg"
 
-            # Configure Egress for audio-only recording to local MinIO
+            logger.info(f"🎬 ATTEMPTING TO START RECORDING: {filename}")
+            logger.info(f"🏠 Room name: {ctx.room.name}")
+            logger.info(f"⏰ Timestamp: {timestamp}")
+
+            # Enhanced S3 configuration for MinIO
+            s3_config = api.S3Upload(
+                bucket=os.getenv("MINIO_BUCKET", "livekit-recordings"),
+                region=os.getenv("MINIO_REGION", "us-east-1"),
+                access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+                secret=os.getenv("MINIO_SECRET_KEY", "minioadmin123"),
+                endpoint=os.getenv("MINIO_ENDPOINT", "http://localhost:9000"),
+                force_path_style=True,  # Required for MinIO
+            )
+
+            logger.info(f"🗄️ S3 Config - bucket: {s3_config.bucket}")
+            logger.info(f"🗄️ S3 Config - endpoint: {s3_config.endpoint}")
+            logger.info(f"🗄️ S3 Config - access_key: {s3_config.access_key[:5]}...")
+
+            # Ensure MinIO bucket exists before starting recording
+            logger.info("🪣 Ensuring MinIO bucket exists...")
+            await ensure_minio_bucket()
+
+            # Enhanced Egress configuration for audio-only recording
             recording_request = api.RoomCompositeEgressRequest(
                 room_name=ctx.room.name,
-                audio_only=True,  # Audio only for voice conversations
+                audio_only=True,
                 file_outputs=[
                     api.EncodedFileOutput(
-                        file_type=api.EncodedFileType.OGG,  # Good for audio-only
+                        file_type=api.EncodedFileType.OGG,
                         filepath=f"conversations/{filename}",
-                        s3=api.S3Upload(
-                            bucket=os.getenv("MINIO_BUCKET", "livekit-recordings"),
-                            region=os.getenv("MINIO_REGION", "us-east-1"),
-                            access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-                            secret=os.getenv("MINIO_SECRET_KEY", "minioadmin123"),
-                            endpoint=os.getenv(
-                                "MINIO_ENDPOINT", "http://localhost:9000"
-                            ),
-                            force_path_style=True,  # Required for MinIO/non-AWS S3
-                        ),
+                        s3=s3_config,
                     )
                 ],
             )
 
-            # Start the recording
-            lkapi = api.LiveKitAPI()
+            logger.info(f"📝 Recording request created - audio_only: True")
+            logger.info(f"📝 File path: conversations/{filename}")
+
+            # Create LiveKit API client with proper credentials
+            logger.info("🔌 Creating LiveKit API client...")
+            lkapi = api.LiveKitAPI(
+                url=os.getenv("LIVEKIT_URL"),
+                api_key=os.getenv("LIVEKIT_API_KEY"),
+                api_secret=os.getenv("LIVEKIT_API_SECRET"),
+            )
+
+            logger.info(f"🔌 LiveKit URL: {os.getenv('LIVEKIT_URL')}")
+            logger.info(f"🔌 API Key: {os.getenv('LIVEKIT_API_KEY')[:10]}...")
+
+            # Start the recording with detailed error handling
+            logger.info(f"🎬 Starting recording for room: {ctx.room.name}")
+            logger.info(
+                f"📊 S3 Config: bucket={s3_config.bucket}, endpoint={s3_config.endpoint}"
+            )
+
             recording_response = await lkapi.egress.start_room_composite_egress(
                 recording_request
             )
+
+            logger.info(f"📨 Recording response received!")
+            logger.info(f"📨 Response type: {type(recording_response)}")
+            logger.info(f"📨 Response: {recording_response}")
+
+            # Verify the recording started successfully
+            if recording_response.egress_id:
+                logger.info(f"✅ Audio recording started successfully!")
+                logger.info(f"📁 Recording ID: {recording_response.egress_id}")
+                logger.info(f"📂 File location: conversations/{filename}")
+                logger.info(f"🗄️ Storage: MinIO bucket '{s3_config.bucket}'")
+                logger.info(f"🔄 Initial status: {recording_response.status}")
+
+                recording_info = {
+                    "egress_id": recording_response.egress_id,
+                    "filename": filename,
+                    "room_name": ctx.room.name,
+                    "started_at": timestamp,
+                }
+
+                logger.info(f"✅ RECORDING_INFO SET: {recording_info}")
+
+                # CRITICAL: Monitor egress status after starting
+                try:
+                    await asyncio.sleep(2)  # Give egress time to initialize
+                    logger.info("🔍 Checking egress status after startup...")
+                    egress_list = await lkapi.egress.list_egress(
+                        api.ListEgressRequest()
+                    )
+
+                    for egress in egress_list.items:
+                        if egress.egress_id == recording_response.egress_id:
+                            logger.info(f"📊 Egress Status: {egress.status}")
+                            logger.info(f"📊 Egress Details: {egress}")
+
+                            if egress.status == api.EgressStatus.EGRESS_FAILED:
+                                logger.error(
+                                    "❌ EGRESS FAILED - Recording will not work!"
+                                )
+                                logger.error(f"❌ Error: {egress.error}")
+                            elif egress.status == api.EgressStatus.EGRESS_ACTIVE:
+                                logger.info(
+                                    "✅ Egress is ACTIVE - recording should work"
+                                )
+                            elif egress.status == api.EgressStatus.EGRESS_STARTING:
+                                logger.info("🔄 Egress is STARTING - normal state")
+                            break
+                    else:
+                        logger.warning(
+                            "⚠️ Could not find egress in list - this is unusual"
+                        )
+
+                except Exception as status_error:
+                    logger.error(f"⚠️ Could not check egress status: {status_error}")
+
+            else:
+                logger.error("❌ Recording response missing egress_id")
+                logger.error(f"❌ Full response: {recording_response}")
+
             await lkapi.aclose()
-
-            # Log recording details
-            logger.info(f"✅ Audio recording started successfully!")
-            logger.info(f"📁 Recording ID: {recording_response.egress_id}")
-            logger.info(f"📂 File location: conversations/{filename}")
-            logger.info(
-                f"🗄️  Storage: MinIO bucket '{os.getenv('MINIO_BUCKET', 'livekit-recordings')}'"
-            )
-
-            # Store recording info for later access and signal handling
-            recording_info = {
-                "egress_id": recording_response.egress_id,
-                "filename": filename,
-                "room_name": ctx.room.name,
-                "started_at": timestamp,
-            }  # Set global recording info for session close handler
-            # (Note: using local variable, session close handler accesses via closure)
+            logger.info("🔌 LiveKit API client closed")
 
         except Exception as e:
             logger.error(f"❌ Failed to start audio recording: {e}")
-            logger.warning("⚠️  Continuing without recording...")
-            # Don't fail the entire session if recording fails        # ============================================
-        # END RECORDING SETUP
+            logger.error(f"📊 Error details: {type(e).__name__}: {str(e)}")
+            if hasattr(e, "response"):
+                logger.error(f"🔍 Server response: {e.response}")
+            logger.warning("⚠️ Continuing without recording...")
+        # ============================================
+        # 🤖 AGENT SETUP
         # ============================================
 
         # ============================================
-        # 🛡️ SIGNAL HANDLING FOR GRACEFUL SHUTDOWN
+        # 🛡️ GRACEFUL SHUTDOWN MECHANISM
         # ============================================
 
-        # Global shutdown flag and cleanup function
+        # Local shutdown flag
         shutdown_requested = False
 
         async def graceful_shutdown(signal_name="unknown"):
-            """Handle graceful shutdown with proper cleanup."""
             nonlocal shutdown_requested
             if shutdown_requested:
-                return  # Prevent multiple shutdowns
+                logger.info("🚫 Shutdown already requested, skipping...")
+                return
             shutdown_requested = True
 
             logger.info(f"🛑 GRACEFUL SHUTDOWN REQUESTED - Signal: {signal_name}")
+            logger.info(f"🔍 Checking recording_info: {recording_info}")
+
             try:
                 # Stop Egress recording if active
                 if recording_info:
                     logger.info("🎬 Stopping audio recording...")
+                    logger.info(f"🎬 Recording info: {recording_info}")
+
                     try:
-                        lkapi = api.LiveKitAPI()
-                        stop_request = StopEgressRequest(
+                        # Create a new LiveKit API client for shutdown operations
+                        shutdown_lkapi = api.LiveKitAPI(
+                            url=os.getenv("LIVEKIT_URL"),
+                            api_key=os.getenv("LIVEKIT_API_KEY"),
+                            api_secret=os.getenv("LIVEKIT_API_SECRET"),
+                        )
+
+                        # Start monitoring task with the new API client
+                        asyncio.create_task(
+                            monitor_egress_status(
+                                shutdown_lkapi, recording_info["egress_id"]
+                            )
+                        )
+
+                        # ENHANCED: Check final status before stopping
+                        logger.info(
+                            "🔍 Checking final egress status before stopping..."
+                        )
+                        try:
+                            egress_list = await shutdown_lkapi.egress.list_egress(
+                                api.ListEgressRequest()
+                            )
+                            for egress in egress_list.items:
+                                if egress.egress_id == recording_info["egress_id"]:
+                                    logger.info(
+                                        f"📊 Final Egress Status: {egress.status}"
+                                    )
+                                    if (
+                                        hasattr(egress, "file_results")
+                                        and egress.file_results
+                                    ):
+                                        for file_result in egress.file_results:
+                                            logger.info(
+                                                f"📁 File Result: {file_result}"
+                                            )
+                                    break
+                        except Exception as status_error:
+                            logger.warning(
+                                f"⚠️ Could not check final egress status: {status_error}"
+                            )
+
+                        # Stop the recording directly using the egress_id
+                        logger.info(
+                            f"🛑 Stopping egress with ID: {recording_info['egress_id']}"
+                        )
+                        stop_request = api.StopEgressRequest(
                             egress_id=recording_info["egress_id"]
                         )
-                        await lkapi.egress.stop_egress(stop_request)
-                        await lkapi.aclose()
+                        stop_response = await shutdown_lkapi.egress.stop_egress(
+                            stop_request
+                        )
                         logger.info("✅ Audio recording stopped successfully!")
-                        logger.info(
-                            f"📁 Recording file: conversations/{recording_info['filename']}"
+                        logger.info(f"✅ Stop response: {stop_response}")
+
+                        # Wait for egress completion
+                        logger.info("⏳ Waiting for egress completion...")
+                        final_egress = await wait_for_egress_completion(
+                            shutdown_lkapi, recording_info["egress_id"]
                         )
-                        logger.info(
-                            f"🌐 Access via: http://localhost:9001/browser/livekit-recordings/conversations/{recording_info['filename']}"
-                        )
+                        if final_egress:
+                            logger.info(
+                                f"📊 Final Egress Status: {final_egress.status}"
+                            )
+                            if (
+                                final_egress.status == api.EgressStatus.EGRESS_COMPLETE
+                                and final_egress.file_results
+                            ):
+                                for file_result in final_egress.file_results:
+                                    logger.info(f"📁 File Result: {file_result}")
+                                    if (
+                                        hasattr(file_result, "location")
+                                        and file_result.location
+                                    ):
+                                        logger.info(
+                                            f"🗄️ File uploaded to: {file_result.location}"
+                                        )
+                                    else:
+                                        logger.info(
+                                            f"📁 Local file: {file_result.filename}"
+                                        )
+                            elif final_egress.status == api.EgressStatus.EGRESS_FAILED:
+                                logger.error(f"❌ EGRESS FAILED: {final_egress.error}")
+                        else:
+                            logger.warning("⚠️ Timeout waiting for egress completion")
+
+                        await shutdown_lkapi.aclose()
+                        logger.info("🔌 Shutdown LiveKit API client closed")
+
                     except Exception as e:
                         logger.error(f"❌ Failed to stop recording: {e}")
+                        logger.error(f"🔍 Error type: {type(e).__name__}")
+                        logger.error(f"🔍 Error details: {str(e)}")
+                else:
+                    logger.warning(
+                        "⚠️ No recording_info found - recording was not active"
+                    )
+                    logger.warning(f"⚠️ recording_info value: {recording_info}")
 
                 # Log session end if monitor exists
                 if "monitor" in locals():
@@ -277,24 +483,24 @@ async def entrypoint(ctx: JobContext):
             finally:
                 # Force exit after cleanup
                 logger.info("👋 Enhanced agent process ended")
-                sys.exit(
-                    0
-                )  # Note: Signal handlers removed due to threading limitations in LiveKit worker threads
+                sys.exit(0)
 
+        # Note: Signal handlers removed due to threading limitations in LiveKit worker threads
         # LiveKit runs agents in worker threads where signal.signal() cannot be used
         # Using LiveKit shutdown callback as the primary graceful shutdown mechanism
         logger.info(
             "🛡️ Graceful shutdown via LiveKit callback (signal handlers not available in worker threads)"
         )
-        logger.info("💡 Use LiveKit shutdown mechanisms or Ctrl+C to stop the agent")
+        logger.info(
+            "💡 Use LiveKit shutdown mechanisms or Ctrl+C to stop the agent"
+        )  # ============================================
 
-        # ============================================
         # 📋 LIVEKIT SHUTDOWN CALLBACK (RECOMMENDED)
         # ============================================
-
-        # Also register LiveKit's shutdown callback for additional safety
+        # Register LiveKit's shutdown callback for graceful cleanup
         async def livekit_shutdown_callback():
             """LiveKit shutdown callback for graceful cleanup."""
+            nonlocal shutdown_requested
             if not shutdown_requested:
                 logger.info("🔔 LiveKit shutdown callback triggered")
                 await graceful_shutdown("LIVEKIT_SHUTDOWN")
@@ -303,13 +509,9 @@ async def entrypoint(ctx: JobContext):
         logger.info("🔔 LiveKit shutdown callback registered")
 
         # ============================================
-        # END SIGNAL HANDLING SETUP
+        # END SHUTDOWN HANDLING SETUP
         # ============================================
 
-        # 1. Connect to room
-        await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
-
-        # 2. Wait for participant
         logger.info("⏳ Waiting for a participant...")
         await ctx.wait_for_participant()
         logger.info("👋 Participant joined, initializing enhanced assistant...")
@@ -322,7 +524,7 @@ async def entrypoint(ctx: JobContext):
         logger.info("🔧 Initializing AssistantFnc...")
         assistant_fnc = AssistantFnc(instructions=INSTRUCTIONS)
 
-        # 3. Create AgentSession with monitoring integration
+        # Create AgentSession first to get access to the session for monitoring
         logger.info("🎯 Creating AgentSession with enhanced monitoring...")
         session = AgentSession(
             stt=azure.STT(
@@ -334,8 +536,7 @@ async def entrypoint(ctx: JobContext):
             ),
             vad=silero.VAD.load(),
             turn_detection=MultilingualModel(),
-        )  # Set global session for session close handler
-        # (Note: using local variable, session close handler accesses via closure)
+        )
 
         # Initialize the streaming conversation monitor BEFORE starting the session
         logger.info("📡 Initializing enhanced streaming conversation monitor...")
@@ -345,8 +546,7 @@ async def entrypoint(ctx: JobContext):
             enable_audio_monitoring=True,
             enable_text_streaming=True,
             streaming_buffer_size=100,
-        )  # Set global monitor for session close handler
-        # (Note: using local variable, session close handler accesses via closure)
+        )
 
         # Log recording setup completion in monitor
         if recording_info:
@@ -366,23 +566,6 @@ async def entrypoint(ctx: JobContext):
         # Start the agent session
         logger.info("🚀 Starting the enhanced agent session...")
         await session.start(agent=enhanced_assistant, room=ctx.room)
-
-        # Wait a moment for tracks to be published
-        await asyncio.sleep(2)
-
-        # Verify agent audio tracks are now available
-        local_audio_tracks = [
-            t
-            for t in ctx.room.local_participant.track_publications.values()
-            if t.track and t.track.kind == "audio"
-        ]
-        logger.info(f"🎵 Agent audio tracks available: {len(local_audio_tracks)}")
-
-        if local_audio_tracks:
-            logger.info("✅ Agent is publishing audio - recording should work!")
-        else:
-            logger.error("❌ Agent not publishing audio - recording will be empty!")
-
         logger.info("✅ Enhanced agent started successfully.")
 
         # Log session start with room information
@@ -475,7 +658,9 @@ async def entrypoint(ctx: JobContext):
                                 logger.info(f"💬 {chunk}")
                                 await asyncio.sleep(
                                     0.2
-                                )  # Small delay for streaming effect                            logger.info("=" * 80)
+                                )  # Small delay for streaming effect
+
+                            logger.info("=" * 80)
                             logger.info("✅ Agent response completed")
                             logger.info("=" * 80)
 
@@ -490,8 +675,9 @@ async def entrypoint(ctx: JobContext):
                     f"Error handling conversation item: {e}",
                     level="error",
                     category="streaming",
-                ) @ session.on("close")
+                )
 
+        @session.on("close")
         def on_session_close(event):
             """Handle session close with enhanced logging."""
             nonlocal shutdown_requested
@@ -502,6 +688,9 @@ async def entrypoint(ctx: JobContext):
                 return
 
             logger.info("🔚 Enhanced session is closing...")
+
+            # Signal the monitor to stop streaming operations
+            monitor.shutdown()
 
             # Log recording completion
             if recording_info:
@@ -547,8 +736,9 @@ async def entrypoint(ctx: JobContext):
                     )
                 except Exception as e:
                     logger.error(f"Error in periodic monitoring: {e}")
-                    break  # Start periodic monitoring in background
+                    break
 
+        # Start periodic monitoring in background
         asyncio.create_task(periodic_monitoring_report())
 
         # Set up text streaming for real-time updates (if room supports it)
@@ -576,7 +766,7 @@ async def entrypoint(ctx: JobContext):
                     "Text stream handler registered successfully", category="streaming"
                 )
         except Exception as e:
-            logger.warning(f"⚠️  Text streaming setup failed: {e}")
+            logger.warning(f"⚠️ Text streaming setup failed: {e}")
             monitor.log_custom_event(
                 f"Text streaming unavailable: {e}",
                 level="warning",
@@ -650,15 +840,18 @@ async def entrypoint(ctx: JobContext):
                     level="error",
                     category="function",
                 )
-                raise  # Replace the original methods with monitored versions
+                raise
 
+        # Replace the original methods with monitored versions
         assistant_fnc.lookup_car = monitored_lookup_car
         assistant_fnc.create_car = monitored_create_car
         assistant_fnc.get_car_details = monitored_get_car_details
 
         monitor.log_custom_event(
             "Enhanced function monitoring active", category="function"
-        )  # Final setup completion
+        )
+
+        # Final setup completion
         monitor.log_custom_event(
             "Enhanced agent setup completed - All monitoring systems active",
             category="general",
@@ -683,8 +876,15 @@ async def entrypoint(ctx: JobContext):
             if "recording_info" in locals() and recording_info:
                 logger.info("🎬 Attempting to stop recording due to error...")
                 try:
-                    lkapi = api.LiveKitAPI()
-                    await lkapi.egress.stop_egress(recording_info["egress_id"])
+                    lkapi = api.LiveKitAPI(
+                        url=os.getenv("LIVEKIT_URL"),
+                        api_key=os.getenv("LIVEKIT_API_KEY"),
+                        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+                    )
+                    stop_request = StopEgressRequest(
+                        egress_id=recording_info["egress_id"]
+                    )
+                    await lkapi.egress.stop_egress(stop_request)
                     await lkapi.aclose()
                     logger.info("✅ Recording stopped after error")
                 except Exception as re:
@@ -702,6 +902,59 @@ async def entrypoint(ctx: JobContext):
                 f"📁 Final recording file: conversations/{recording_info['filename']}"
             )
         logger.info("👋 Enhanced agent process ended")
+
+
+async def ensure_minio_bucket():
+    """Ensure MinIO bucket exists before recording"""
+    from minio import Minio
+    from minio.error import S3Error
+
+    try:
+        minio_endpoint_raw = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+
+        # Handle both http and https endpoints
+        if minio_endpoint_raw.startswith("https://"):
+            minio_endpoint = minio_endpoint_raw.replace("https://", "")
+            secure = True
+        else:
+            minio_endpoint = minio_endpoint_raw.replace("http://", "")
+            secure = False
+
+        client = Minio(
+            minio_endpoint,
+            # os.getenv("MINIO_ENDPOINT", "localhost:9000").replace("http://", ""),
+            access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+            secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin123"),
+            secure=True,
+        )
+        bucket = os.getenv("MINIO_BUCKET", "livekit-recordings")
+
+        if not client.bucket_exists(bucket):
+            client.make_bucket(bucket)
+            logger.info(f"🪣 Created MinIO bucket: {bucket}")
+        else:
+            logger.info(f"🪣 MinIO bucket exists: {bucket}")
+    except Exception as e:
+        logger.error(f"❌ Failed to ensure MinIO bucket: {e}")
+
+
+async def monitor_egress_status(lkapi, egress_id):
+    """Monitor egress status periodically during session"""
+    while True:
+        await asyncio.sleep(10)  # Check every 10 seconds
+        try:
+            egress_list = await lkapi.egress.list_egress(api.ListEgressRequest())
+            for egress in egress_list.items:
+                if egress.egress_id == egress_id:
+                    logger.info(f"🔄 Egress Status: {egress.status}")
+                    if egress.status == api.EgressStatus.EGRESS_FAILED:
+                        logger.error(f"❌ Egress Failed: {egress.error}")
+                    break
+            else:
+                logger.warning("⚠️ Egress not found in list")
+        except Exception as e:
+            logger.error(f"Error monitoring egress: {e}")
+            break
 
 
 if __name__ == "__main__":

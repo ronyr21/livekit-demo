@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LiveKit Connection Test</title>
+    <script src="https://unpkg.com/livekit-client@2.5.7/dist/livekit-client.umd.js"></script>
+</head>
+<body>
+    <h1>LiveKit Connection Test</h1>
+    <div id="status">Testing...</div>
+    <div id="logs"></div>
+
+    <script>
+        const logs = document.getElementById('logs');
+        const status = document.getElementById('status');
+        
+        function log(message) {
+            console.log(message);
+            logs.innerHTML += '<div>' + message + '</div>';
+        }
+
+        async function testConnection() {
+            try {
+                // Get a token first
+                log('🎟️ Getting token...');
+                const response = await fetch('http://localhost:5001/admin/monitor/playground-TLwU-pITD', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        admin_identity: 'admin_test_html'
+                    })
+                });
+
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+
+                log('✅ Got token: ' + data.token.substring(0, 50) + '...');
+                log('🏠 LiveKit URL: ' + data.instructions.livekit_url);
+
+                // Try to connect
+                log('🔌 Attempting to connect...');
+                const room = new LiveKit.Room({
+                    logLevel: 'debug'
+                });
+
+                room.on('connected', () => {
+                    log('✅ Connected successfully!');
+                    status.textContent = 'Connected!';
+                });
+
+                room.on('disconnected', (reason) => {
+                    log('🔌 Disconnected: ' + reason);
+                    status.textContent = 'Disconnected: ' + reason;
+                });
+
+                room.on('connectionStateChanged', (state) => {
+                    log('🔄 Connection state: ' + state);
+                    status.textContent = 'State: ' + state;
+                });
+
+                room.on('participantConnected', (participant) => {
+                    log('👤 Participant connected: ' + participant.identity);
+                });
+
+                await room.connect(data.instructions.livekit_url, data.token);
+
+            } catch (error) {
+                log('❌ Error: ' + error.message);
+                status.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        testConnection();
+    </script>
+</body>
+</html>

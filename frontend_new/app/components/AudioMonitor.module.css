@@ -1,0 +1,316 @@
+/* Audio Monitor Styles */
+.audioMonitorContainer {
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 15px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.monitoringContainer {
+  padding: 24px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Header Section */
+.monitoringHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e6e6e6;
+}
+
+.headerInfo {
+  flex: 1;
+}
+
+.roomTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: #2B3674;
+  margin: 0 0 8px 0;
+  line-height: 1.2;
+}
+
+.roomDetails {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #a3aed0;
+  font-weight: 500;
+}
+
+.connectionStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f4f7fe;
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: background-color 0.3s ease;
+}
+
+.statusDot.connected {
+  background-color: #10b981;
+}
+
+.statusDot.connecting {
+  background-color: #f59e0b;
+  animation: pulse 2s infinite;
+}
+
+.statusDot.disconnected {
+  background-color: #ef4444;
+}
+
+.statusText {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2B3674;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Audio Section */
+.audioSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 200px;
+}
+
+.audioVisualization {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.waveContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.audioWave {
+  animation: audioWave 2s ease-in-out infinite alternate;
+}
+
+@keyframes audioWave {
+  0% { opacity: 0.7; transform: scaleY(0.8); }
+  100% { opacity: 1; transform: scaleY(1.1); }
+}
+
+.listeningText {
+  font-size: 16px;
+  font-weight: 500;
+  color: #10b981;
+}
+
+.noAudio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+}
+
+.noAudioText {
+  font-size: 16px;
+  color: #a3aed0;
+}
+
+/* Participants Section */
+.participantsSection {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.participantsTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2B3674;
+  margin: 0 0 12px 0;
+}
+
+.noParticipants {
+  color: #a3aed0;
+  font-size: 14px;
+  margin: 0;
+  text-align: center;
+  padding: 20px;
+}
+
+.participantsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.participantItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #ffffff;
+  border-radius: 8px;
+  border: 1px solid #e6e6e6;
+}
+
+.participantName {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2B3674;
+}
+
+.participantStatus {
+  display: flex;
+  gap: 4px;
+}
+
+.speaking, .audio {
+  font-size: 12px;
+}
+
+/* Control Section */
+.controlSection {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e6e6e6;
+}
+
+.stopButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.stopButton:hover {
+  background: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.stopButton:active {
+  transform: translateY(0);
+}
+
+/* Loading States */
+.loadingContainer,
+.errorContainer,
+.noTokenContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+}
+
+.loadingContent,
+.errorContent,
+.noTokenContent {
+  text-align: center;
+  max-width: 400px;
+}
+
+.loadingContent h3,
+.errorContent h3,
+.noTokenContent h3 {
+  color: #2B3674;
+  margin: 0 0 12px 0;
+  font-size: 20px;
+}
+
+.loadingContent p,
+.errorContent p,
+.noTokenContent p {
+  color: #a3aed0;
+  margin: 0 0 24px 0;
+  line-height: 1.5;
+}
+
+.loadingSpinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f4f7fe;
+  border-top: 4px solid #9443d0;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px auto;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.errorMessage {
+  background: #fef2f2;
+  color: #dc2626 !important;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  margin: 16px 0 !important;
+}
+
+.errorActions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.retryButton,
+.backButton {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+}
+
+.retryButton {
+  background: #9443d0;
+  color: white;
+}
+
+.retryButton:hover {
+  background: #7c3aed;
+}
+
+.backButton {
+  background: #f4f7fe;
+  color: #2B3674;
+}
+
+.backButton:hover {
+  background: #e5e7ef;
+}

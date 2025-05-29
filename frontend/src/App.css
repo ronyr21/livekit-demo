@@ -209,3 +209,39 @@ nav a:hover {
 .name-form .cancel-button:hover {
   background-color: #555;
 }
+
+/* Admin Access Styles */
+.admin-access-button {
+  background: #ffc107;
+  color: #212529;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  transition: background 0.2s;
+}
+
+.admin-access-button:hover {
+  background: #e0a800;
+}
+
+.admin-header {
+  background-color: #6f42c1;
+}
+
+.back-to-main-button {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.back-to-main-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

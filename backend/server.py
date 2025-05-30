@@ -183,5 +183,133 @@ async def get_room_list_token():
 # END ADMIN MONITORING ENDPOINTS
 # ============================================================================
 
+
+# ============================================================================
+# INDIVIDUAL PARTICIPANT RECORDING ENDPOINTS
+# ============================================================================
+
+
+@app.route("/recording/participants", methods=["GET"])
+async def get_active_participant_recordings():
+    """Get list of active individual participant recordings"""
+    try:
+        # This would typically interface with a database or monitoring service
+        # For now, return a placeholder response
+        logger.info("📊 Getting active participant recordings...")
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Active participant recordings retrieved",
+                "recordings": [],  # Would be populated from TrackEgressManager in production
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed to get participant recordings: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/recording/participant/<participant_id>/start", methods=["POST"])
+async def start_participant_recording(participant_id):
+    """Start individual recording for a specific participant"""
+    try:
+        room_name = request.json.get("room_name")
+        audio_track_id = request.json.get("audio_track_id")
+        enable_websocket = request.json.get("enable_websocket_streaming", True)
+
+        if not room_name:
+            return jsonify({"success": False, "error": "room_name is required"}), 400
+
+        logger.info(
+            f"🎯 Starting individual recording for participant: {participant_id}"
+        )
+        logger.info(f"📡 Room: {room_name}, Track: {audio_track_id}")
+
+        # In production, this would interface with TrackEgressManager
+        # For now, return a success response
+        recording_info = {
+            "participant_id": participant_id,
+            "room_name": room_name,
+            "audio_track_id": audio_track_id,
+            "egress_id": f"egress_{participant_id}_{int(time.time())}",
+            "started_at": datetime.now().isoformat(),
+            "websocket_streaming": enable_websocket,
+        }
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Individual recording started for {participant_id}",
+                "recording": recording_info,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed to start participant recording: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/recording/participant/<participant_id>/stop", methods=["POST"])
+async def stop_participant_recording(participant_id):
+    """Stop individual recording for a specific participant"""
+    try:
+        logger.info(
+            f"🛑 Stopping individual recording for participant: {participant_id}"
+        )
+
+        # In production, this would interface with TrackEgressManager
+        # For now, return a success response
+
+        return jsonify(
+            {
+                "success": True,
+                "message": f"Individual recording stopped for {participant_id}",
+                "participant_id": participant_id,
+                "stopped_at": datetime.now().isoformat(),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed to stop participant recording: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/recording/participant/<participant_id>/status", methods=["GET"])
+async def get_participant_recording_status(participant_id):
+    """Get recording status for a specific participant"""
+    try:
+        logger.info(f"📊 Getting recording status for participant: {participant_id}")
+
+        # In production, this would query TrackEgressManager
+        # For now, return a placeholder status
+        status_info = {
+            "participant_id": participant_id,
+            "is_recording": False,  # Would be actual status from TrackEgressManager
+            "egress_id": None,
+            "started_at": None,
+            "duration": None,
+            "file_location": None,
+            "websocket_url": None,
+        }
+
+        return jsonify(
+            {
+                "success": True,
+                "status": status_info,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Failed to get participant recording status: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================================
+# END INDIVIDUAL RECORDING ENDPOINTS
+# ============================================================================
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
